@@ -20,8 +20,16 @@
 
 package main
 
-import "github.com/djmarkoz/dutil/cmd"
+import (
+	"log"
+
+	"github.com/djmarkoz/dutil/cmd"
+)
 
 func main() {
 	cmd.Execute()
+}
+
+func init() {
+	log.SetFlags(0)
 }

@@ -30,7 +30,6 @@ import (
 	"sync"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 var sourceRepository string
@@ -40,7 +39,6 @@ var destVersion string
 var imageNameFilter string
 var imageNameExcludeFilter string
 
-// retagCmd represents the retag command
 var retagCmd = &cobra.Command{
 	Use:   "retag",
 	Short: "Change the repository of existing Docker images",
@@ -58,14 +56,18 @@ func init() {
 	retagCmd.PersistentFlags().StringVarP(&sourceVersion, "source-version", "v", "latest", "source Docker image version")
 	retagCmd.PersistentFlags().StringVarP(&destRepository, "dest-repository", "d", "", "destination Docker repository")
 	retagCmd.PersistentFlags().StringVarP(&destVersion, "dest-version", "V", "latest", "destination Docker image version")
-
-	viper.BindPFlag("source-repository", retagCmd.PersistentFlags().Lookup("source-repository"))
-	viper.BindPFlag("source-version", retagCmd.PersistentFlags().Lookup("source-version"))
-	viper.BindPFlag("dest-repository", retagCmd.PersistentFlags().Lookup("dest-repository"))
-	viper.BindPFlag("dest-version", retagCmd.PersistentFlags().Lookup("dest-version"))
 }
 
 func retag() {
+	if sourceRepository == "" {
+		fmt.Println("missing source-repository")
+		return
+	}
+	if destRepository == "" {
+		fmt.Println("missing dest-repository")
+		return
+	}
+
 	cmd := exec.Command("docker", "image", "ls", "--format", "{{.ID}} {{.Repository}} {{.Tag}}")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -107,7 +109,7 @@ func processLine(wg *sync.WaitGroup, workChannel chan<- string, line string) {
 
 		parts := strings.Split(line, " ")
 		if len(parts) != 3 {
-			log.Fatal(errors.New("Incorrect output of 'docker images ls'"))
+			log.Fatal(errors.New("incorrect output of 'docker images ls'"))
 		}
 		url := strings.Replace(parts[1], sourceRepository, destRepository, 1)
 		version := strings.Replace(parts[2], sourceVersion, destVersion, 1)
@@ -116,12 +118,10 @@ func processLine(wg *sync.WaitGroup, workChannel chan<- string, line string) {
 			return
 		}
 		if imageNameExcludeFilter != "" && strings.Contains(url, imageNameExcludeFilter) {
-			log.Println("exclude image: '" + line + "'")
 			return
 		}
 
 		image := fmt.Sprintf("%s:%s", url, version)
-		log.Println(image)
 		cmd := exec.Command("docker", "image", "tag", parts[0], image)
 		err := cmd.Start()
 		if err != nil {
@@ -138,13 +138,14 @@ func processLine(wg *sync.WaitGroup, workChannel chan<- string, line string) {
 }
 
 func pushImage(image string) {
-	log.Printf("Pushing Docker image %s\n", image)
+	log.Printf("pushing '%s'\n", image)
 
 	cmd := exec.Command("docker", "push", image)
 	stdoutStderr, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("%s\n", stdoutStderr)
-		log.Fatal("failed", err)
+		log.Fatalf("push failed '%s': %v", image, err)
 	}
-	log.Printf("Pushed %s to GCR\n", image)
+
+	log.Printf("pushed '%s'\n", image)
 }
