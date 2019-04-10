@@ -30,9 +30,15 @@ import (
 	"sync"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
+var sourceRepository string
+var sourceVersion string
+var destRepository string
+var destVersion string
 var imageNameFilter string
+var imageNameExcludeFilter string
 
 // retagCmd represents the retag command
 var retagCmd = &cobra.Command{
@@ -46,6 +52,17 @@ var retagCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(retagCmd)
 	retagCmd.PersistentFlags().StringVarP(&imageNameFilter, "filter", "f", "", "filter Docker images by name; name must contain the provided filter")
+	retagCmd.PersistentFlags().StringVarP(&imageNameExcludeFilter, "exclude-filter", "e", "", "exclude filter Docker images by name; name must not contain the provided exclude filter")
+
+	retagCmd.PersistentFlags().StringVarP(&sourceRepository, "source-repository", "s", "", "source Docker image repository")
+	retagCmd.PersistentFlags().StringVarP(&sourceVersion, "source-version", "v", "latest", "source Docker image version")
+	retagCmd.PersistentFlags().StringVarP(&destRepository, "dest-repository", "d", "", "destination Docker repository")
+	retagCmd.PersistentFlags().StringVarP(&destVersion, "dest-version", "V", "latest", "destination Docker image version")
+
+	viper.BindPFlag("source-repository", retagCmd.PersistentFlags().Lookup("source-repository"))
+	viper.BindPFlag("source-version", retagCmd.PersistentFlags().Lookup("source-version"))
+	viper.BindPFlag("dest-repository", retagCmd.PersistentFlags().Lookup("dest-repository"))
+	viper.BindPFlag("dest-version", retagCmd.PersistentFlags().Lookup("dest-version"))
 }
 
 func retag() {
@@ -72,31 +89,7 @@ func retag() {
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.Contains(line, "latest") && strings.Contains(line, "registry.acc.meddex.nl/meddexmsp/") {
-			if imageNameFilter != "" && !strings.Contains(line, imageNameFilter) {
-				continue
-			}
-
-			parts := strings.Split(line, " ")
-			if len(parts) != 3 {
-				log.Fatal(errors.New("Incorrect output of 'docker images ls'"))
-			}
-			url := strings.Replace(parts[1], "registry.acc.meddex.nl/meddexmsp/", "eu.gcr.io/djmarkoz-gcp/", 1)
-
-			image := fmt.Sprintf("%s:%s", url, parts[2])
-			cmd := exec.Command("docker", "image", "tag", parts[0], image)
-			err := cmd.Start()
-			if err != nil {
-				log.Fatal("failed to tag docker image", err)
-			}
-			err = cmd.Wait()
-			if err != nil {
-				log.Fatal("failed to wait for docker tag command", err)
-			}
-
-			wg.Add(1)
-			workChannel <- image
-		}
+		processLine(&wg, workChannel, line)
 	}
 	if err := scanner.Err(); err != nil {
 		log.Fatal("reading standard input:", err)
@@ -107,6 +100,41 @@ func retag() {
 
 	wg.Wait()
 	close(workChannel)
+}
+
+func processLine(wg *sync.WaitGroup, workChannel chan<- string, line string) {
+	if strings.Contains(line, " "+sourceVersion) && strings.Contains(line, sourceRepository) {
+
+		parts := strings.Split(line, " ")
+		if len(parts) != 3 {
+			log.Fatal(errors.New("Incorrect output of 'docker images ls'"))
+		}
+		url := strings.Replace(parts[1], sourceRepository, destRepository, 1)
+		version := strings.Replace(parts[2], sourceVersion, destVersion, 1)
+
+		if imageNameFilter != "" && !strings.Contains(url, imageNameFilter) {
+			return
+		}
+		if imageNameExcludeFilter != "" && strings.Contains(url, imageNameExcludeFilter) {
+			log.Println("exclude image: '" + line + "'")
+			return
+		}
+
+		image := fmt.Sprintf("%s:%s", url, version)
+		log.Println(image)
+		cmd := exec.Command("docker", "image", "tag", parts[0], image)
+		err := cmd.Start()
+		if err != nil {
+			log.Fatal("failed to tag docker image: ", err)
+		}
+		err = cmd.Wait()
+		if err != nil {
+			log.Fatal("failed to wait for docker tag command: ", err)
+		}
+
+		wg.Add(1)
+		workChannel <- image
+	}
 }
 
 func pushImage(image string) {
