@@ -28,6 +28,9 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/gosuri/uiprogress"
 
 	"github.com/spf13/cobra"
 )
@@ -79,15 +82,8 @@ func retag() {
 
 	workChannel := make(chan string, 256)
 	var wg sync.WaitGroup
-	for i := 0; i < threads; i++ {
-		go func() {
-			for imageToPush := range workChannel {
-				pushImage(imageToPush)
-				wg.Done()
-			}
-		}()
-	}
 
+	log.Println("Found images to push")
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -100,8 +96,28 @@ func retag() {
 		log.Fatal("failed to wait for listing docker images", err)
 	}
 
+	count := len(workChannel)
+	bar := uiprogress.AddBar(count).AppendCompleted().PrependElapsed()
+	bar.PrependFunc(func(b *uiprogress.Bar) string {
+		return fmt.Sprintf("Pushing (%d/%d)", b.Current(), count)
+	})
+
+	// do the work
+	log.Println("Starting pushing images")
+	uiprogress.Start()
+	for i := 0; i < threads; i++ {
+		go func() {
+			for imageToPush := range workChannel {
+				pushImage(imageToPush)
+				bar.Incr()
+				wg.Done()
+			}
+		}()
+	}
+
 	wg.Wait()
 	close(workChannel)
+	uiprogress.Stop()
 }
 
 func processLine(wg *sync.WaitGroup, workChannel chan<- string, line string) {
@@ -132,20 +148,28 @@ func processLine(wg *sync.WaitGroup, workChannel chan<- string, line string) {
 			log.Fatal("failed to wait for docker tag command: ", err)
 		}
 
+		log.Printf("- %s\n", image)
+
 		wg.Add(1)
 		workChannel <- image
 	}
 }
 
 func pushImage(image string) {
-	log.Printf("pushing '%s'\n", image)
+	//log.Printf("pushing '%s'\n", image)
 
 	cmd := exec.Command("docker", "push", image)
 	stdoutStderr, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("%s\n", stdoutStderr)
-		log.Fatalf("push failed '%s': %v", image, err)
+		if strings.Contains(err.Error(), "database is locked") {
+			log.Printf("push failed '%s': %v. Retrying.\n", image, err)
+			time.Sleep(1 * time.Second)
+			pushImage(image)
+		} else {
+			log.Printf("%s\n", stdoutStderr)
+			log.Fatalf("push failed '%s': %v", image, err)
+		}
 	}
 
-	log.Printf("pushed '%s'\n", image)
+	//log.Printf("pushed '%s'\n", image)
 }
