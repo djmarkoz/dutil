@@ -22,6 +22,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"log"
@@ -161,7 +162,19 @@ func pushImage(image string) {
 	cmd := exec.Command("docker", "push", image)
 	stdoutStderr, err := cmd.CombinedOutput()
 	if err != nil {
-		if strings.Contains(err.Error(), "database is locked") {
+		scanner := bufio.NewScanner(bytes.NewReader(stdoutStderr))
+		retry := false
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.Contains(line, "database is locked") {
+				retry = true
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			log.Fatal("reading standard input:", err)
+		}
+
+		if retry {
 			log.Printf("push failed '%s': %v. Retrying.\n", image, err)
 			time.Sleep(1 * time.Second)
 			pushImage(image)
