@@ -1,6 +1,12 @@
 # dutil
 Docker command-line utility
 
+## Install
+
+```bash
+go get -u -v github.com/djmarkoz/dutil
+```
+
 ## Features
 
 1. Batch re-tag one or more Docker images with a new repository and/or version
